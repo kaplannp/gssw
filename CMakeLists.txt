@@ -7,6 +7,7 @@ project(gssw)
 # We build using c++14
 set(CMAKE_CXX_STANDARD 14)
 
+
 # Use all standard-compliant optimizations
 set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g")
@@ -18,6 +19,8 @@ set(LIBRARY_OUTPUT_PATH ${CMAKE_SOURCE_DIR}/lib)
 
 # The following folder will be included
 include_directories("${PROJECT_SOURCE_DIR}")
+include_directories("$ENV{VG_HOME}")
+include_directories("$ENV{VTUNE_HOME}/include")
 
 #set(CMAKE_BUILD_TYPE Release)
 
@@ -41,3 +44,18 @@ elseif (TRUE)
     set(CMAKE_EXE_LINKER_FLAGS "-static")
   endif()
 endif()
+
+#target_include_directories(libgssw   AFTER PUBLIC "$ENV{VG_HOME}")
+#target_include_directories(libgssw   AFTER PUBLIC "$ENV{VTUNE_HOME}/include")
+#target_include_directories(gssw-test AFTER PUBLIC "$ENV{VG_HOME}")
+#target_include_directories(gssw-test AFTER PUBLIC "$ENV{VTUNE_HOME}/include")
+#target_include_directories(gssw_objs AFTER PUBLIC "$ENV{VG_HOME}")
+#target_include_directories(gssw_objs AFTER PUBLIC "$ENV{VTUNE_HOME}/include")
+
+
+#link_libraries("ittnotify")
+
+
+target_link_libraries(libgssw   "-L/opt/intel/oneapi/vtune/latest/lib64" "-littnotify" "-L/lib/x86_64-linux-gnu/libdl.so.2" "-lpthread" "-ldl" )
+target_link_libraries(gssw-test "-L/opt/intel/oneapi/vtune/latest/lib64" "-littnotify" "-L/lib/x86_64-linux-gnu/libdl.so.2" "-lpthread" "-ldl" )
+target_link_libraries(gssw_objs "-L/opt/intel/oneapi/vtune/latest/lib64" "-littnotify" "-L/lib/x86_64-linux-gnu/libdl.so.2" "-lpthread" "-ldl" ) 
