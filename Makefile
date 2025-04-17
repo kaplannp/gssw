@@ -1,4 +1,4 @@
-CC:=gcc
+CC:=gcc-11
 CFLAGS+=-Wall -O3 -g
 OBJ_DIR:=obj
 BIN_DIR:=bin
