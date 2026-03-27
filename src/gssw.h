@@ -92,43 +92,8 @@ typedef struct {
 	// We need the seed information about H and E, which we get from the possible
 	// previous nodes.
     gssw_seed seed;
-    // This stores 1 if we did the alignment with byte scores, in which case the
-    // matrix pointers below should point to an matrices composed of bytes. If
-    // it is 0, the matrices are composed of 2-byte values.
-    uint8_t is_byte;
-
-    // We keep de-striped versions of all the alignment matrices, to allow
-    // traceback.
-
-    // Pointer to the H matrix for the alignment, which holds, at each position,
-    // the score of the best alignment of the corresponding substrings, no
-    // matter what it ends with.
-    void* mH;
-    // Pointer to the E matrix for the alignment, which holds scores for
-    // alignments ending with gaps in the read.
-    void* mE;
-    // Pointer to the F matrix, which holds scores for alignments ending with
-    // gaps in the reference.
-    void* mF;
 } gssw_align;
 
-typedef struct {
-	uint16_t score;
-	int32_t ref;	 //0-based position
-	int32_t read;    //alignment ending position on read, 0-based
-} gssw_alignment_end;
-
-// A CIGAR element is a number of repetitions of a CIGAR operation.
-typedef struct {
-    char type;
-    uint32_t length;
-} gssw_cigar_element;
-
-// A CIGAR is an array of elements.
-typedef struct {
-    int32_t length;
-    gssw_cigar_element* elements;
-} gssw_cigar;
 
 // A profile is a sort of exploded score matrix. We fill a whole read by
 // reference matrix with the score you would get by matching a particular
@@ -161,74 +126,10 @@ typedef struct _gssw_node {
 } _gssw_node;
 
 typedef struct {
-    gssw_node* node;
-    gssw_cigar cigar;
-    int32_t ref_begin;
-	int32_t ref_end;
-	int32_t	read_begin;
-	int32_t read_end;
-} gssw_node_mapping;
-
-typedef struct {
-    gssw_node* node;
-    gssw_alignment_end end;
-} gssw_node_alignment_end;
-
-typedef struct {
     uint32_t size;
     gssw_node* max_node;
     gssw_node** nodes;
 } gssw_graph;
-
-typedef struct {
-    gssw_node* node;
-    gssw_cigar* cigar;
-} gssw_node_cigar;
-
-typedef struct {
-    uint32_t length;   // number of nodes traversed
-    gssw_node_cigar* elements; // describes traceback
-} gssw_graph_cigar;
-
-typedef struct {
-    int32_t position; // position in first node
-    int16_t score;
-    gssw_graph_cigar cigar;
-} gssw_graph_mapping;
-
-// matrices in the SSW algorithm
-typedef enum gssw_matrix_t {Match, ReadGap, RefGap} gssw_matrix_t;
-
-// position in the DP structure
-typedef struct {
-    int32_t read_pos;
-    int32_t ref_pos;
-    gssw_matrix_t from_matrix;
-    gssw_matrix_t to_matrix;
-    gssw_node* from_node;
-    gssw_node* to_node;
-} gssw_trace_back_deflection;
-
-// an array of positions where the traceback follows a suboptimal alignment
-typedef struct {
-    int16_t score;
-    gssw_trace_back_deflection* deflections; // first deflection should be the start coordinates
-    int32_t num_deflections;
-} gssw_alternate_alignment_ends;
-
-// a linked list of top alternate alignments
-typedef struct gssw_multi_align_stack_node {
-    gssw_alternate_alignment_ends* alt_alignment;
-    struct gssw_multi_align_stack_node* next;
-    struct gssw_multi_align_stack_node* prev;
-} gssw_multi_align_stack_node;
-
-typedef struct {
-    int32_t current_size;
-    int32_t capacity;
-    gssw_multi_align_stack_node* bottom_scoring;
-    gssw_multi_align_stack_node* top_scoring;
-} gssw_multi_align_stack;
 
 
 #ifdef __cplusplus
@@ -303,7 +204,6 @@ gssw_align* gssw_fill (const gssw_profile* prof,
                        const uint8_t weight_gapO,
                        const uint8_t weight_gapE,
                        const int32_t maskLen,
-                       bool save_matrixes,
                        gssw_seed* seed);
 
 
@@ -317,138 +217,9 @@ void gssw_align_destroy (gssw_align* a);
 */
 void gssw_align_clear_matrix_and_seed (gssw_align* a);
 
-/*! @function       Print score matrix, determines stride from result score
-    @param refLen   Reference length.
-    @param readLen  Read length.
-    @param result   Alignment result.
-*/
-void gssw_print_score_matrix (const char* ref,
-                              int32_t refLen,
-                              const char* read,
-                              int32_t readLen,
-                              gssw_align* alignment,
-                              FILE* out);
-
-void gssw_graph_print(gssw_graph* graph);
-void gssw_graph_print_stderr(gssw_graph* graph);
-
-/*! @function         Trace back alignment across score matrix stored in alignment structure
-    @param alignment  Alignment structure.
-    @param end        Alignment ending position.
-*/
-
-
-gssw_cigar* gssw_alignment_trace_back (gssw_node* node,
-                                       gssw_multi_align_stack* alt_alignment_stack,
-                                       gssw_alternate_alignment_ends* alignment_deflections,
-                                       int32_t* deflection_idx,
-                                       int32_t final_traceback,
-                                       int32_t find_internal_node_alts,
-                                       uint16_t* score,
-                                       int32_t* refEnd,
-                                       int32_t* readEnd,
-                                       int32_t* refGapFlag,
-                                       int32_t* readGapFlag,
-                                       const char* ref,
-                                       int32_t refLen,
-                                       const char* read,
-                                       int8_t* qual_num,
-                                       int32_t readLen,
-                                       int8_t* nt_table,
-                                       int8_t* score_matrix,
-                                       uint8_t gap_open,
-                                       uint8_t gap_extension,
-                                       int8_t start_full_length_bonus,
-                                       int8_t end_full_length_bonus);
-
-gssw_cigar* gssw_alignment_trace_back_byte (gssw_node* node,
-                                            gssw_multi_align_stack* alt_alignment_stack,
-                                            gssw_alternate_alignment_ends* alignment_deflections,
-                                            int32_t* deflection_idx,
-                                            int32_t final_traceback,
-                                            int32_t find_internal_node_alts,
-                                            uint16_t* score,
-                                            int32_t* refEnd,
-                                            int32_t* readEnd,
-                                            int32_t* refGapFlag,
-                                            int32_t* readGapFlag,
-                                            const char* ref,
-                                            int32_t refLen,
-                                            const char* read,
-                                            int8_t* qual_num,
-                                            int32_t readLen,
-                                            int8_t* nt_table,
-                                            int8_t* score_matrix,
-                                            uint8_t gap_open,
-                                            uint8_t gap_extension,
-                                            int8_t start_full_length_bonus,
-                                            int8_t end_full_length_bonus);
-
-// Compute and return the traceback from a graph for which the alignment DP has been performed.
-gssw_graph_mapping* gssw_graph_trace_back (gssw_graph* graph,
-                                           const char* read,
-                                           int32_t readLen,
-                                           int8_t* nt_table,
-                                           int8_t* score_matrix,
-                                           uint8_t gap_open,
-                                           uint8_t gap_extension,
-                                           int8_t start_full_length_bonus,
-                                           int8_t end_full_length_bonus);
-
-// Computes the traceback ending with the final character of the read aligned to the final character
-// of any of a set of given nodes (which is taken to be all sink nodes if no set is provided)
-gssw_graph_mapping* gssw_graph_trace_back_pinned (gssw_graph* graph,
-                                                  const char* read,
-                                                  int32_t readLen,
-                                                  gssw_node** pinning_nodes,
-                                                  int32_t num_pinning_nodes,
-                                                  int8_t* nt_table,
-                                                  int8_t* score_matrix,
-                                                  uint8_t gap_open,
-                                                  uint8_t gap_extension,
-                                                  int8_t start_full_length_bonus,
-                                                  int8_t end_full_length_bonus);
-
-// Computes an arbitrary number of highest scoring tracebacks ending with the final character of the
-// read aligned to the final character of of any of a set of given nodes (which is taken to be all
-// sink nodes if no set is provided)
-gssw_graph_mapping** gssw_graph_trace_back_pinned_multi (gssw_graph* graph,
-                                                         int32_t num_tracebacks,
-                                                         int32_t find_internal_node_alts,
-                                                         const char* read,
-                                                         int32_t readLen,
-                                                         gssw_node** pinning_nodes,
-                                                         int32_t num_pinning_nodes,
-                                                         int8_t* nt_table,
-                                                         int8_t* score_matrix,
-                                                         uint8_t gap_open,
-                                                         uint8_t gap_extension,
-                                                         int8_t start_full_length_bonus,
-                                                         int8_t end_full_length_bonus);
-
-
-
-/*! @function         Return 1 if the alignment is in 16/128bit (byte sized) or 0 if word-sized.
-    @param alignment  Alignment structure.
-*/
-int gssw_is_byte (gssw_align* alignment);
-
-/*! @function         Generate a traceback of the given alignment, using H, E, and F matrices
-    @param alignment  Alignment structure.
-    @param readPos    Starting position of alignment in reference.
-    @param readPos    Starting position of alignment in read.
-*/
-//cigar* traceback (s_align* alignment, int32_t readPos, int32_t refPos);
-
 void gssw_profile_destroy(gssw_profile* prof);
 void gssw_seed_destroy(gssw_seed* seed);
 gssw_seed* gssw_create_seed_byte(int32_t readLen, gssw_node** prev, int32_t count);
-
-void gssw_cigar_push_back(gssw_cigar* c, char type, uint32_t length);
-void gssw_cigar_push_front(gssw_cigar* c, char type, uint32_t length);
-void gssw_reverse_cigar(gssw_cigar* c);
-void gssw_print_cigar(gssw_cigar* c, FILE* out);
-void gssw_cigar_destroy(gssw_cigar* c);
 
 gssw_node* gssw_node_create(void* data,
                             const uint64_t id,
@@ -472,7 +243,6 @@ gssw_node_fill (gssw_node* node,
                 const uint8_t weight_gapO,
                 const uint8_t weight_gapE,
                 const int32_t maskLen,
-                bool save_matrixes,
                 const gssw_seed* seed);
 
 gssw_graph*
@@ -484,8 +254,7 @@ gssw_graph_fill (gssw_graph* graph,
                  const uint8_t weight_gapE,
                  const int8_t start_full_length_bonus,
                  const int8_t end_full_length_bonus,
-                 const int32_t maskLen,
-                 bool save_matrixes);
+                 const int32_t maskLen);
 
 gssw_graph*
 gssw_graph_fill_pinned (gssw_graph* graph,
@@ -496,27 +265,13 @@ gssw_graph_fill_pinned (gssw_graph* graph,
                         const uint8_t weight_gapE,
                         const int8_t start_full_length_bonus,
                         const int8_t end_full_length_bonus,
-                        const int32_t maskLen,
-                        bool save_matrixes);
+                        const int32_t maskLen);
 
 gssw_graph* gssw_graph_create(uint32_t size);
 uint32_t gssw_graph_add_node(gssw_graph* graph,
                             gssw_node* node);
 void gssw_graph_clear(gssw_graph* graph);
 void gssw_graph_destroy(gssw_graph* graph);
-void gssw_graph_print_score_matrices(gssw_graph* graph,
-                                     const char* read,
-                                     int32_t readLen,
-                                     FILE* out);
-
-gssw_graph_mapping* gssw_graph_mapping_create(void);
-void gssw_graph_mapping_destroy(gssw_graph_mapping* m);
-gssw_graph_cigar* gssw_graph_cigar_create(void);
-void gssw_graph_cigar_destroy(gssw_graph_cigar* g);
-void gssw_print_graph_cigar(gssw_graph_cigar* g, FILE* out);
-void gssw_print_graph_mapping(gssw_graph_mapping* gm, FILE* out);
-//void gssw_graph_cigar_to_string(gssw_graph_cigar* g);
-//void gssw_graph_mapping_to_string(gssw_graph_mapping* gm);
 
 // some utility functions
 int8_t* gssw_create_score_matrix(int32_t match, int32_t mismatch);
@@ -583,28 +338,6 @@ int8_t* gssw_dna_scaled_adjusted_qual_matrix(int8_t max_score, uint8_t max_qual,
                                              int8_t* gap_extend_out, int8_t match_score, int8_t mismatch_score,
                                              double gc_content, double tol);
 
-
-/* Initializes a stack to keep track of top alternate alignments (up to the capacity) in score sorted order */
-gssw_multi_align_stack* gssw_new_multi_align_stack(int32_t capacity);
-
-/* Destructor for the stack */
-void gssw_delete_multi_align_stack(gssw_multi_align_stack* stack);
-
-/* Constructor for a node on the stack */
-gssw_multi_align_stack_node* gssw_new_multi_align_stack_node(gssw_alternate_alignment_ends* alignment_suffix, int16_t score,
-                                                             int32_t read_pos, int32_t ref_pos, gssw_node* from_node,
-                                                             gssw_node* to_node, gssw_matrix_t from_matrix, gssw_matrix_t to_matrix);
-
-/* Destructor for a node on the stack */
-void gssw_delete_multi_align_stack_node(gssw_multi_align_stack_node* stack_node);
-
-/* Adds an alignment onto the stack if there is room or if it is higher scoring than any of the alignments currently in it */
-void gssw_add_alignment(gssw_multi_align_stack* stack, gssw_alternate_alignment_ends* alignment_suffix, int16_t score,
-                        int32_t read_pos, int32_t ref_pos, gssw_node* from_node, gssw_node* to_node, gssw_matrix_t from_matrix,
-                        gssw_matrix_t to_matrix);
-
-/* Retuns the lowest score of an alternate alignment in the stack */
-int16_t gssw_min_alt_alignment_score(gssw_multi_align_stack* stack);
 
 #ifdef __cplusplus
 }
