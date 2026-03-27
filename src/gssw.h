@@ -96,10 +96,10 @@ typedef struct {
     // matrix pointers below should point to an matrices composed of bytes. If
     // it is 0, the matrices are composed of 2-byte values.
     uint8_t is_byte;
-    
+
     // We keep de-striped versions of all the alignment matrices, to allow
     // traceback.
-    
+
     // Pointer to the H matrix for the alignment, which holds, at each position,
     // the score of the best alignment of the corresponding substrings, no
     // matter what it ends with.
@@ -137,8 +137,6 @@ typedef struct {
 struct gssw_profile{
     // We keep one version, stored striped, for byte-sized alignment
 	__m128i* profile_byte;	// 0: none
-	// And another for word-sized alignment.
-	__m128i* profile_word;	// 0: none
 	const int8_t* read;
 	const int8_t* mat;
 	int32_t readLen;
@@ -244,8 +242,6 @@ extern "C" {
 	@param	n	the square root of the number of elements in mat (mat has n*n elements)
 	@param	start_full_length_bonus	a bonus for aligning the full length of an alignment at the start of a query
 	@param	end_full_length_bonus	a bonus for aligning the full length of an alignment at the end of a query
-	@param	score_size	estimated Smith-Waterman score; if your estimated best alignment score is surely < 255 please set 0; if
-						your estimated best alignment score >= 255, please set 1; if you don't know, please set 2
 	@return	pointer to the query profile structure
 	@note	example for parameter read and mat:
 			If the query sequence is: ACGTATC, the sequence that read points to can be: 1234142
@@ -258,34 +254,7 @@ extern "C" {
 			mat is the pointer to the array {2, -2, -2, -2, -2, 2, -2, -2, -2, -2, 2, -2, -2, -2, -2, 2}
 */
 gssw_profile* gssw_init (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n,
-                         int8_t start_full_length_bonus, int8_t end_full_length_bonus, const int8_t score_size);
-
-/*!	@function	Create the quality-score adjusted query profile using the query sequence and its quality scores.
-	@param	read        pointer to the query sequence; the query sequence needs to be numbers
-	@param	readLen     length of the query sequence
-	@param	adj_mat     pointer to the adjusted substitution matrix; mat needs to be corresponding to the read sequence
-                            - see gssw_adjusted_qual_matrix and gssw_scaled_adjusted_qual_matrix
-	@param	n           the square root of the number of elements in mat (mat has n*n elements)
-	@param	start_full_length_bonus	a bonus for aligning the full length of an alignment at the start of a query
-	@param	end_full_length_bonus	a bonus for aligning the full length of an alignment at the end of a query
-	@param	score_size  estimated Smith-Waterman score; if your estimated best alignment score is surely < 255 please set 0; if
-                        your estimated best alignment score >= 255, please set 1; if you don't know, please set 2
-	@return	pointer to the query profile structure
-	@note	example for parameter read and mat:
-			If the query sequence is: ACGTATC, the sequence that read points to can be: 1234142
-			Then if the penalty for match is 2 and for mismatch is -2, the substitution matrix of parameter mat will be:
-			//A  C  G  T
-			  2 -2 -2 -2 //A
-			 -2  2 -2 -2 //C
-			 -2 -2  2 -2 //G
-			 -2 -2 -2  2 //T
-			mat is the pointer to the array {2, -2, -2, -2, -2, 2, -2, -2, -2, -2, 2, -2, -2, -2, -2, 2}
-	@note   score_size option from gssw_init is implicitly set to 1 since adjusted scores should be scaled to as large
-            of value as possible anyway to increase sensitivity
-*/
-gssw_profile* gssw_qual_adj_init (const int8_t* read, const int8_t* qual, const int32_t readLen, const int8_t* adj_mat,
-                                  const int32_t n, int8_t start_full_length_bonus, int8_t end_full_length_bonus,
-                                  const int8_t score_size);
+                         int8_t start_full_length_bonus, int8_t end_full_length_bonus);
 
 /*!	@function	Release the memory allocated by function ssw_init.
 	@param	p	pointer to the query profile structure
@@ -307,55 +276,11 @@ gssw_align* gssw_align_create(void);
 					beginning position; bit 6: when setted as 1, if (ref_end1 - ref_begin1 < filterd && read_end1 - read_begin1
 					< filterd), (whatever bit 5 is setted) the function will return the best alignment beginning position and
 					cigar; bit 7: when setted as 1, if the best alignment score >= filters, (whatever bit 5 is setted) the function
-  					will return the best alignment beginning position and cigar; bit 8: when setted as 1, (whatever bit 5, 6 or 7 is
- 					setted) the function will always return the best alignment beginning position and cigar. When flag == 0, only
+ 					will return the best alignment beginning position and cigar; bit 8: when setted as 1, (whatever bit 5, 6 or 7 is
+					setted) the function will always return the best alignment beginning position and cigar. When flag == 0, only
 					the optimal and sub-optimal scores and the optimal alignment ending position will be returned.
 	@param	filters	score filter: when bit 7 of flag is setted as 1 and bit 8 is setted as 0, filters will be used (Please check the
- 					decription of the flag parameter for detailed usage.)
-	@param	filterd	distance filter: when bit 6 of flag is setted as 1 and bit 8 is setted as 0, filterd will be used (Please check
-					the decription of the flag parameter for detailed usage.)
-	@param	maskLen	The distance between the optimal and suboptimal alignment ending position >= maskLen. We suggest to use
-					readLen/2, if you don't have special concerns. Note: maskLen has to be >= 15, otherwise this function will NOT
-					return the suboptimal alignment information. Detailed description of maskLen: After locating the optimal
-					alignment ending position, the suboptimal alignment score can be heuristically found by checking the second
-					largest score in the array that contains the maximal score of each column of the SW matrix. In order to avoid
-					picking the scores that belong to the alignments sharing the partial best alignment, SSW C library masks the
-					reference loci nearby (mask length = maskLen) the best alignment ending position and locates the second largest
-					score from the unmasked elements.
-	@return	pointer to the alignment result structure
-	@note	Whatever the parameter flag is setted, this function will at least return the optimal and sub-optimal alignment score,
-			and the optimal alignment ending positions on target and query sequences. If both bit 6 and 7 of the flag are setted
-			while bit 8 is not, the function will return cigar only when both criteria are fulfilled. All returned positions are
-			0-based coordinate.
-*/
-gssw_align* gssw_ssw_align (const gssw_profile* prof,
-                            const int8_t* ref,
-                            int32_t refLen,
-                            const uint8_t weight_gapO,
-                            const uint8_t weight_gapE,
-                            const uint8_t flag,
-                            const uint16_t filters,
-                            const int32_t filterd,
-                            const int32_t maskLen,
-                            bool score_only);
-
-// @function	ssw fill.
-/*!	@function	Do Striped Smith-Waterman alignment, but do not generate cigar.  Only return best score, filled matrix, and last E vector.
-	@param	prof	pointer to the query profile structure
-	@param	ref	pointer to the target sequence; the target sequence needs to be numbers and corresponding to the mat parameter of
-				function ssw_init
-	@param	refLen	length of the target sequence
-	@param	weight_gapO	the absolute value of gap open penalty
-	@param	weight_gapE	the absolute value of gap extension penalty
-	@param	flag	bitwise FLAG; (from high to low) bit 5: when setted as 1, function ssw_align will return the best alignment
-					beginning position; bit 6: when setted as 1, if (ref_end1 - ref_begin1 < filterd && read_end1 - read_begin1
-					< filterd), (whatever bit 5 is setted) the function will return the best alignment beginning position and
-					cigar; bit 7: when setted as 1, if the best alignment score >= filters, (whatever bit 5 is setted) the function
-  					will return the best alignment beginning position and cigar; bit 8: when setted as 1, (whatever bit 5, 6 or 7 is
- 					setted) the function will always return the best alignment beginning position and cigar. When flag == 0, only
-					the optimal and sub-optimal scores and the optimal alignment ending position will be returned.
-	@param	filters	score filter: when bit 7 of flag is setted as 1 and bit 8 is setted as 0, filters will be used (Please check the
- 					decription of the flag parameter for detailed usage.)
+					decription of the flag parameter for detailed usage.)
 	@param	filterd	distance filter: when bit 6 of flag is setted as 1 and bit 8 is setted as 0, filterd will be used (Please check
 					the decription of the flag parameter for detailed usage.)
 	@param	maskLen	The distance between the optimal and suboptimal alignment ending position >= maskLen. We suggest to use
@@ -378,7 +303,7 @@ gssw_align* gssw_fill (const gssw_profile* prof,
                        const uint8_t weight_gapO,
                        const uint8_t weight_gapE,
                        const int32_t maskLen,
-                       bool score_only,
+                       bool save_matrixes,
                        gssw_seed* seed);
 
 
@@ -411,8 +336,8 @@ void gssw_graph_print_stderr(gssw_graph* graph);
     @param alignment  Alignment structure.
     @param end        Alignment ending position.
 */
-    
-    
+
+
 gssw_cigar* gssw_alignment_trace_back (gssw_node* node,
                                        gssw_multi_align_stack* alt_alignment_stack,
                                        gssw_alternate_alignment_ends* alignment_deflections,
@@ -435,31 +360,8 @@ gssw_cigar* gssw_alignment_trace_back (gssw_node* node,
                                        uint8_t gap_extension,
                                        int8_t start_full_length_bonus,
                                        int8_t end_full_length_bonus);
-    
-gssw_cigar* gssw_alignment_trace_back_byte (gssw_node* node,
-                                            gssw_multi_align_stack* alt_alignment_stack,
-                                            gssw_alternate_alignment_ends* alignment_deflections,
-                                            int32_t* deflection_idx,
-                                            int32_t final_traceback,
-                                            int32_t find_internal_node_alts,
-                                            uint16_t* score,
-                                            int32_t* refEnd,
-                                            int32_t* readEnd,
-                                            int32_t* refGapFlag,
-                                            int32_t* readGapFlag,
-                                            const char* ref,
-                                            int32_t refLen,
-                                            const char* read,
-                                            int8_t* qual_num,
-                                            int32_t readLen,
-                                            int8_t* nt_table,
-                                            int8_t* score_matrix,
-                                            uint8_t gap_open,
-                                            uint8_t gap_extension,
-                                            int8_t start_full_length_bonus,
-                                            int8_t end_full_length_bonus);
 
-gssw_cigar* gssw_alignment_trace_back_word (gssw_node* node,
+gssw_cigar* gssw_alignment_trace_back_byte (gssw_node* node,
                                             gssw_multi_align_stack* alt_alignment_stack,
                                             gssw_alternate_alignment_ends* alignment_deflections,
                                             int32_t* deflection_idx,
@@ -492,20 +394,9 @@ gssw_graph_mapping* gssw_graph_trace_back (gssw_graph* graph,
                                            uint8_t gap_extension,
                                            int8_t start_full_length_bonus,
                                            int8_t end_full_length_bonus);
-    
-gssw_graph_mapping* gssw_graph_trace_back_qual_adj (gssw_graph* graph,
-                                                    const char* read,
-                                                    const char* qual,
-                                                    int32_t readLen,
-                                                    int8_t* nt_table,
-                                                    int8_t* adj_score_matrix,
-                                                    uint8_t gap_open,
-                                                    uint8_t gap_extension,
-                                                    int8_t start_full_length_bonus,
-                                                    int8_t end_full_length_bonus);
 
 // Computes the traceback ending with the final character of the read aligned to the final character
-// of any of a set of given nodes (which is taken to be allå sink nodes if no set is provided)
+// of any of a set of given nodes (which is taken to be all sink nodes if no set is provided)
 gssw_graph_mapping* gssw_graph_trace_back_pinned (gssw_graph* graph,
                                                   const char* read,
                                                   int32_t readLen,
@@ -517,19 +408,6 @@ gssw_graph_mapping* gssw_graph_trace_back_pinned (gssw_graph* graph,
                                                   uint8_t gap_extension,
                                                   int8_t start_full_length_bonus,
                                                   int8_t end_full_length_bonus);
-    
-gssw_graph_mapping* gssw_graph_trace_back_pinned_qual_adj (gssw_graph* graph,
-                                                           const char* read,
-                                                           const char* qual,
-                                                           int32_t readLen,
-                                                           gssw_node** pinning_nodes,
-                                                           int32_t num_pinning_nodes,
-                                                           int8_t* nt_table,
-                                                           int8_t* adj_score_matrix,
-                                                           uint8_t gap_open,
-                                                           uint8_t gap_extension,
-                                                           int8_t start_full_length_bonus,
-                                                           int8_t end_full_length_bonus);
 
 // Computes an arbitrary number of highest scoring tracebacks ending with the final character of the
 // read aligned to the final character of of any of a set of given nodes (which is taken to be all
@@ -548,23 +426,8 @@ gssw_graph_mapping** gssw_graph_trace_back_pinned_multi (gssw_graph* graph,
                                                          int8_t start_full_length_bonus,
                                                          int8_t end_full_length_bonus);
 
-gssw_graph_mapping** gssw_graph_trace_back_pinned_qual_adj_multi (gssw_graph* graph,
-                                                                  int32_t num_tracebacks,
-                                                                  int32_t find_internal_node_alts,
-                                                                  const char* read,
-                                                                  const char* qual,
-                                                                  int32_t readLen,
-                                                                  gssw_node** pinning_nodes,
-                                                                  int32_t num_pinning_nodes,
-                                                                  int8_t* nt_table,
-                                                                  int8_t* adj_score_matrix,
-                                                                  uint8_t gap_open,
-                                                                  uint8_t gap_extension,
-                                                                  int8_t start_full_length_bonus,
-                                                                  int8_t end_full_length_bonus);
 
 
-    
 /*! @function         Return 1 if the alignment is in 16/128bit (byte sized) or 0 if word-sized.
     @param alignment  Alignment structure.
 */
@@ -580,7 +443,6 @@ int gssw_is_byte (gssw_align* alignment);
 void gssw_profile_destroy(gssw_profile* prof);
 void gssw_seed_destroy(gssw_seed* seed);
 gssw_seed* gssw_create_seed_byte(int32_t readLen, gssw_node** prev, int32_t count);
-gssw_seed* gssw_create_seed_word(int32_t readLen, gssw_node** prev, int32_t count);
 
 void gssw_cigar_push_back(gssw_cigar* c, char type, uint32_t length);
 void gssw_cigar_push_front(gssw_cigar* c, char type, uint32_t length);
@@ -623,23 +485,8 @@ gssw_graph_fill (gssw_graph* graph,
                  const int8_t start_full_length_bonus,
                  const int8_t end_full_length_bonus,
                  const int32_t maskLen,
-                 const int8_t score_size,
                  bool save_matrixes);
 
-gssw_graph*
-gssw_graph_fill_qual_adj(gssw_graph* graph,
-                         const char* read_seq,
-                         const char* read_qual,
-                         const int8_t* nt_table,
-                         const int8_t* adj_score_matrix,
-                         const uint8_t weight_gapO,
-                         const uint8_t weight_gapE,
-                         const int8_t start_full_length_bonus,
-                         const int8_t end_full_length_bonus,
-                         const int32_t maskLen,
-                         const int8_t score_size,
-                         bool save_matrixes);
-    
 gssw_graph*
 gssw_graph_fill_pinned (gssw_graph* graph,
                         const char* read_seq,
@@ -650,23 +497,8 @@ gssw_graph_fill_pinned (gssw_graph* graph,
                         const int8_t start_full_length_bonus,
                         const int8_t end_full_length_bonus,
                         const int32_t maskLen,
-                        const int8_t score_size,
                         bool save_matrixes);
 
-gssw_graph*
-gssw_graph_fill_pinned_qual_adj(gssw_graph* graph,
-                                const char* read_seq,
-                                const char* read_qual,
-                                const int8_t* nt_table,
-                                const int8_t* adj_score_matrix,
-                                const uint8_t weight_gapO,
-                                const uint8_t weight_gapE,
-                                const int8_t start_full_length_bonus,
-                                const int8_t end_full_length_bonus,
-                                const int32_t maskLen,
-                                const int8_t score_size,
-                                bool save_matrixes);
-    
 gssw_graph* gssw_graph_create(uint32_t size);
 uint32_t gssw_graph_add_node(gssw_graph* graph,
                             gssw_node* node);
@@ -692,17 +524,13 @@ int8_t* gssw_create_nt_table(void);
 int8_t* gssw_create_num(const char* seq,
                         const int32_t len,
                         const int8_t* nt_table);
-int8_t* gssw_create_qual_num(const char* qual,
-                             const int32_t len);
-int8_t gssw_max_qual(const int8_t* qual,
-                      const int32_t len);
 
-    
+
 /* Numerically computes the base of the logarithm in the log-odds interpretation of the scoring matrix */
 double gssw_recover_log_base(const int8_t* score_matrix, const double* char_freqs, uint32_t alphabet_size, double tol);
 /* Convenient wrapper for DNA matrices */
 double gssw_dna_recover_log_base(int8_t match, int8_t mismatch, double gc_content, double tol);
-    
+
 // functions for adjusting alignments for base quality (see also gssw_qual_adj_init)
 
 /*! @function   Create a base-quality adjusted scoring matrix to use across reads
@@ -748,17 +576,17 @@ int8_t* gssw_scaled_adjusted_qual_matrix(int8_t max_score, uint8_t max_qual, int
 
 /* Creates a new set of matrices with 0 scores in the final row/column for ambiguous characters */
 int8_t* gssw_add_ambiguous_char_to_adjusted_matrix(int8_t* adj_mat, uint8_t max_qual, uint32_t alphabet_size);
-    
+
 /* Wrapper for gssw_adjusted_qual_matrix using simple parameterization of char_freqs and score_matrix
    Adds row and column of 0s for N bases automatically */
 int8_t* gssw_dna_scaled_adjusted_qual_matrix(int8_t max_score, uint8_t max_qual, int8_t* gap_open_out,
                                              int8_t* gap_extend_out, int8_t match_score, int8_t mismatch_score,
                                              double gc_content, double tol);
 
-    
+
 /* Initializes a stack to keep track of top alternate alignments (up to the capacity) in score sorted order */
 gssw_multi_align_stack* gssw_new_multi_align_stack(int32_t capacity);
-    
+
 /* Destructor for the stack */
 void gssw_delete_multi_align_stack(gssw_multi_align_stack* stack);
 
@@ -774,16 +602,10 @@ void gssw_delete_multi_align_stack_node(gssw_multi_align_stack_node* stack_node)
 void gssw_add_alignment(gssw_multi_align_stack* stack, gssw_alternate_alignment_ends* alignment_suffix, int16_t score,
                         int32_t read_pos, int32_t ref_pos, gssw_node* from_node, gssw_node* to_node, gssw_matrix_t from_matrix,
                         gssw_matrix_t to_matrix);
-    
+
 /* Retuns the lowest score of an alternate alignment in the stack */
 int16_t gssw_min_alt_alignment_score(gssw_multi_align_stack* stack);
 
-/* Turn on the SSE2 matrix filler (which is on by default) */    
-void gssw_sse2_enable();
-
-/* Turn off the SSE2 matrix filler and use a pure software implementation */
-void gssw_sse2_disable();
-    
 #ifdef __cplusplus
 }
 #endif	// __cplusplus
