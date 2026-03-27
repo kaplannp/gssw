@@ -458,51 +458,32 @@ gssw_alignment_end* gssw_sw_sse2_byte (const int8_t* ref,
     return bests;
 }
 
-/* Simplified gssw_init: byte-only, no score_size parameter */
-gssw_profile* gssw_init (const int8_t* read, const int32_t readLen, const int8_t* mat, const int32_t n,
-                         int8_t start_full_length_bonus, int8_t end_full_length_bonus) {
-    gssw_profile* p = (gssw_profile*)calloc(1, sizeof(struct gssw_profile));
-    p->profile_byte = 0;
-    p->bias = 0;
-    int32_t bias = 0, i;
-    for (i = 0; i < n*n; i++) if (mat[i] < bias) bias = mat[i];
-    bias = abs(bias);
+// Hardcoded scoring: match=1, mismatch=-4, n=4, bias=4, bonus=5/5
+gssw_profile* gssw_init(const int8_t* read, int32_t readLen) {
+    static const int8_t mat[16] = {
+         1, -4, -4, -4,
+        -4,  1, -4, -4,
+        -4, -4,  1, -4,
+        -4, -4, -4,  1
+    };
+    const int32_t n = 4;
+    const uint8_t bias = 4;
+    const int8_t start_bonus = 5;
+    const int8_t end_bonus = 5;
+
+    gssw_profile* p = (gssw_profile*)calloc(
+        1, sizeof(struct gssw_profile));
     p->bias = bias;
-    p->profile_byte = gssw_qP_byte(read, mat, readLen, n, bias, start_full_length_bonus, end_full_length_bonus);
+    p->profile_byte = gssw_qP_byte(
+        read, mat, readLen, n, bias, start_bonus, end_bonus);
     p->read = read;
-    p->mat = mat;
     p->readLen = readLen;
-    p->n = n;
     return p;
 }
 
 void gssw_init_destroy (gssw_profile* p) {
     free(p->profile_byte);
     free(p);
-}
-
-/* Simplified gssw_fill: byte-only SSE2, no fallback */
-gssw_align* gssw_fill (const gssw_profile* prof,
-                       const int8_t* ref,
-                       const int32_t refLen,
-                       const uint8_t weight_gapO,
-                       const uint8_t weight_gapE,
-                       const int32_t maskLen,
-                       gssw_seed* seed) {
-    gssw_alignment_end* bests = 0;
-    int32_t readLen = prof->readLen;
-    gssw_align* alignment = gssw_align_create();
-    if (maskLen < 15) {
-        fprintf(stderr, "When maskLen < 15, the function ssw_align doesn't return 2nd best alignment information.\n");
-    }
-    bests = gssw_sw_sse2_byte(ref, 0, refLen, readLen, weight_gapO, weight_gapE,
-                              prof->profile_byte, -1, prof->bias, maskLen, alignment, seed);
-    if (bests[0].score == 255) {
-        fprintf(stderr, "Warning: score overflow (255) in byte mode\n");
-    }
-    alignment->score1 = bests[0].score;
-    free(bests);
-    return alignment;
 }
 
 gssw_align* gssw_align_create (void) {
@@ -573,145 +554,6 @@ void gssw_nodes_add_edge(gssw_node* n, gssw_node* m) {
     gssw_node_add_prev(m, n);
 }
 
-gssw_seed* gssw_create_seed_byte(int32_t readLen, gssw_node** prev, int32_t count) {
-    int32_t j = 0, k = 0;
-    for (k = 0; k < count; ++k) {
-        if (!prev[k]->alignment) {
-            fprintf(stderr, "error:[gssw] cannot align because node predecessors cannot provide seed\n");
-            fprintf(stderr, "failing is node %llu\n", prev[k]->id);
-            exit(1);
-        }
-    }
-    __m128i vZero = _mm_set1_epi32(0);
-    int32_t segLen = (readLen + 15) / 16;
-    gssw_seed* seed = (gssw_seed*)calloc(1, sizeof(gssw_seed));
-    if (!(!posix_memalign((void**)&seed->pvE,      sizeof(__m128i), segLen*sizeof(__m128i)) &&
-          !posix_memalign((void**)&seed->pvHStore, sizeof(__m128i), segLen*sizeof(__m128i)))) {
-        fprintf(stderr, "error:[gssw] Could not allocate memory for alignment seed\n"); exit(1);
-        exit(1);
-    }
-    memset(seed->pvE,      0, segLen*sizeof(__m128i));
-    memset(seed->pvHStore, 0, segLen*sizeof(__m128i));
-    // take the max of all inputs
-    __m128i pvE = vZero, pvH = vZero, ovE = vZero, ovH = vZero;
-    for (j = 0; j < segLen; ++j) {
-        pvE = vZero; pvH = vZero;
-        for (k = 0; k < count; ++k) {
-            ovE = _mm_load_si128(prev[k]->alignment->seed.pvE + j);
-            ovH = _mm_load_si128(prev[k]->alignment->seed.pvHStore + j);
-            pvE = _mm_max_epu8(pvE, ovE);
-            pvH = _mm_max_epu8(pvH, ovH);
-        }
-        _mm_store_si128(seed->pvHStore + j, pvH);
-        _mm_store_si128(seed->pvE + j, pvE);
-    }
-    return seed;
-}
-
-/* Simplified gssw_graph_fill_internal: byte-only, no word retry */
-gssw_graph*
-gssw_graph_fill_internal (gssw_graph* graph,
-                          const char* read_seq,
-                          const int8_t* nt_table,
-                          const int8_t* score_matrix,
-                          const uint8_t weight_gapO,
-                          const uint8_t weight_gapE,
-                          const int8_t start_full_length_bonus,
-                          const int8_t end_full_length_bonus,
-                          const int32_t maskLen) {
-    int32_t read_length = strlen(read_seq);
-    int8_t* read_num = gssw_create_num(read_seq, read_length, nt_table);
-    gssw_profile* prof = gssw_init(read_num, read_length, score_matrix, 5,
-                                    start_full_length_bonus, end_full_length_bonus);
-    gssw_seed* seed = NULL;
-    uint16_t max_score = 0;
-    uint32_t i;
-    gssw_node** npp = &graph->nodes[0];
-    // seed the head nodes
-    for (i = 0; i < graph->size; ++i, ++npp) {
-        gssw_node* n = *npp;
-        if (!n->count_prev) {
-            seed = gssw_create_seed_byte(prof->readLen, n->prev, n->count_prev);
-            gssw_node_fill(n, prof, weight_gapO, weight_gapE, maskLen, seed);
-            gssw_seed_destroy(seed); seed = NULL;
-            if (!graph->max_node || n->alignment->score1 > max_score) {
-                graph->max_node = n;
-                max_score = n->alignment->score1;
-            }
-        }
-    }
-    npp = &graph->nodes[0];
-    // fill non-head nodes in topological order
-    for (i = 0; i < graph->size; ++i, ++npp) {
-        gssw_node* n = *npp;
-        if (n->count_prev) {
-            seed = gssw_create_seed_byte(prof->readLen, n->prev, n->count_prev);
-            gssw_node_fill(n, prof, weight_gapO, weight_gapE, maskLen, seed);
-            gssw_seed_destroy(seed); seed = NULL;
-            if (!graph->max_node || n->alignment->score1 > max_score) {
-                graph->max_node = n;
-                max_score = n->alignment->score1;
-            }
-        }
-    }
-    free(read_num);
-    gssw_profile_destroy(prof);
-    return graph;
-}
-
-gssw_graph*
-gssw_graph_fill (gssw_graph* graph,
-                 const char* read_seq,
-                 const int8_t* nt_table,
-                 const int8_t* score_matrix,
-                 const uint8_t weight_gapO,
-                 const uint8_t weight_gapE,
-                 const int8_t start_full_length_bonus,
-                 const int8_t end_full_length_bonus,
-                 const int32_t maskLen) {
-    return gssw_graph_fill_internal(graph, read_seq, nt_table, score_matrix,
-                                    weight_gapO, weight_gapE, start_full_length_bonus,
-                                    end_full_length_bonus, maskLen);
-}
-
-gssw_graph*
-gssw_graph_fill_pinned (gssw_graph* graph,
-                        const char* read_seq,
-                        const int8_t* nt_table,
-                        const int8_t* score_matrix,
-                        const uint8_t weight_gapO,
-                        const uint8_t weight_gapE,
-                        const int8_t start_full_length_bonus,
-                        const int8_t end_full_length_bonus,
-                        const int32_t maskLen) {
-    return gssw_graph_fill_internal(graph, read_seq, nt_table, score_matrix,
-                                    weight_gapO, weight_gapE, start_full_length_bonus,
-                                    end_full_length_bonus, maskLen);
-}
-
-/* Simplified gssw_node_fill: byte-only SSE2, no fallback */
-gssw_node*
-gssw_node_fill (gssw_node* node,
-                const gssw_profile* prof,
-                const uint8_t weight_gapO,
-                const uint8_t weight_gapE,
-                const int32_t maskLen,
-                const gssw_seed* seed) {
-    gssw_alignment_end* bests = NULL;
-    int32_t readLen = prof->readLen;
-    gssw_align* alignment = node->alignment;
-    if (alignment) {
-        gssw_align_destroy(alignment);
-    }
-    node->alignment = alignment = gssw_align_create();
-    bests = gssw_sw_sse2_byte((const int8_t*)node->num, 0, node->len, readLen,
-                               weight_gapO, weight_gapE, prof->profile_byte, -1,
-                               prof->bias, maskLen, alignment, seed);
-    alignment->score1 = bests[0].score;
-    free(bests);
-    return node;
-}
-
 gssw_graph* gssw_graph_create(uint32_t size) {
     gssw_graph* g = calloc(1, sizeof(gssw_graph));
     g->nodes = malloc(size*sizeof(gssw_node*));
@@ -730,32 +572,16 @@ void gssw_graph_destroy(gssw_graph* g) {
     free(g);
 }
 
-int8_t* gssw_create_num(const char* seq,
-                        const int32_t len,
-                        const int8_t* nt_table) {
-    int32_t m;
-    int8_t* num = (int8_t*)malloc(len);
-    for (m = 0; m < len; ++m) num[m] = nt_table[(int)seq[m]];
-    return num;
-}
-
-
 // SoA graph fill: push-based seed propagation, returns best score
+// Hardcoded: gapO=6, gapE=1, maskLen=15
 uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
-                              const char* read_seq,
-                              const int8_t* nt_table,
-                              const int8_t* score_matrix,
-                              uint8_t weight_gapO,
-                              uint8_t weight_gapE,
-                              int8_t start_full_length_bonus,
-                              int8_t end_full_length_bonus,
-                              int32_t maskLen) {
-    int32_t read_length = strlen(read_seq);
-    int8_t* read_num = gssw_create_num(
-        read_seq, read_length, nt_table);
-    gssw_profile* prof = gssw_init(
-        read_num, read_length, score_matrix, 5,
-        start_full_length_bonus, end_full_length_bonus);
+                              const int8_t* read_num,
+                              int32_t read_length) {
+    const uint8_t weight_gapO = 6;
+    const uint8_t weight_gapE = 1;
+    const int32_t maskLen = 15;
+
+    gssw_profile* prof = gssw_init(read_num, read_length);
 
     int32_t segLen = (read_length + 15) / 16;
     uint32_t N = graph->num_nodes;
@@ -816,7 +642,6 @@ uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
     free(seed_H);
     free(seed_E);
     gssw_align_destroy(alignment);
-    free(read_num);
     gssw_profile_destroy(prof);
 
     return max_score;
@@ -830,37 +655,4 @@ void gssw_soa_graph_destroy(gssw_soa_graph* g) {
     free(g);
 }
 
-int8_t* gssw_create_score_matrix(int32_t match, int32_t mismatch) {
-    // initialize scoring matrix for genome sequences
-    //  A  C  G  T    N (or other ambiguous code)
-    //  2 -2 -2 -2     0    A
-    // -2  2 -2 -2     0    C
-    // -2 -2  2 -2     0    G
-    // -2 -2 -2  2     0    T
-    //    0  0  0  0  0    N (or other ambiguous code)
-    int32_t l, k, m;
-    int8_t* mat = (int8_t*)calloc(25, sizeof(int8_t));
-    for (l = k = 0; l < 4; ++l) {
-        for (m = 0; m < 4; ++m) mat[k++] = l == m ? match : - mismatch;    /* weight_match : -weight_mismatch */
-        mat[k++] = 0; // ambiguous base: no penalty
-    }
-    for (m = 0; m < 5; ++m) mat[k++] = 0;
-    return mat;
-}
-
-int8_t* gssw_create_nt_table(void) {
-    int8_t* ret_nt_table = calloc(128, sizeof(int8_t));
-    int8_t nt_table[128] = {
-        4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-        4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-        4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-        4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-        4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4,
-        4, 4, 4, 4,  3, 0, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4,
-        4, 0, 4, 1,  4, 4, 4, 2,  4, 4, 4, 4,  4, 4, 4, 4,
-        4, 4, 4, 4,  3, 0, 4, 4,  4, 4, 4, 4,  4, 4, 4, 4
-    };
-    memcpy(ret_nt_table, nt_table, 128*sizeof(int8_t));
-    return ret_nt_table;
-}
 
