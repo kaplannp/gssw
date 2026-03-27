@@ -113,6 +113,24 @@ typedef struct {
     gssw_node** nodes;
 } gssw_graph;
 
+// Descriptor for one node in the SoA graph
+typedef struct {
+    int16_t seq_off;   // offset into seqs array
+    int16_t seq_len;   // length of this node's numeric sequence
+    int16_t next_off;  // offset into nexts array
+    int16_t next_len;  // number of children
+} gssw_node_desc;
+
+// Struct-of-arrays graph (nodes indexed by topological order)
+typedef struct {
+    uint32_t num_nodes;
+    gssw_node_desc* nodes;   // array[num_nodes]
+    int16_t* nexts;          // flattened child node indices
+    int8_t* seqs;            // flattened numeric sequences
+    uint32_t total_nexts;    // total length of nexts array
+    uint32_t total_seq;      // total length of seqs array
+} gssw_soa_graph;
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -241,6 +259,19 @@ gssw_graph_fill_pinned (gssw_graph* graph,
 
 gssw_graph* gssw_graph_create(uint32_t size);
 void gssw_graph_destroy(gssw_graph* graph);
+
+// SoA graph alignment (push-based seed propagation, returns best score)
+uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
+                              const char* read_seq,
+                              const int8_t* nt_table,
+                              const int8_t* score_matrix,
+                              uint8_t weight_gapO,
+                              uint8_t weight_gapE,
+                              int8_t start_full_length_bonus,
+                              int8_t end_full_length_bonus,
+                              int32_t maskLen);
+
+void gssw_soa_graph_destroy(gssw_soa_graph* g);
 
 // some utility functions
 int8_t* gssw_create_score_matrix(int32_t match, int32_t mismatch);

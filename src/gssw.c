@@ -740,6 +740,96 @@ int8_t* gssw_create_num(const char* seq,
 }
 
 
+// SoA graph fill: push-based seed propagation, returns best score
+uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
+                              const char* read_seq,
+                              const int8_t* nt_table,
+                              const int8_t* score_matrix,
+                              uint8_t weight_gapO,
+                              uint8_t weight_gapE,
+                              int8_t start_full_length_bonus,
+                              int8_t end_full_length_bonus,
+                              int32_t maskLen) {
+    int32_t read_length = strlen(read_seq);
+    int8_t* read_num = gssw_create_num(
+        read_seq, read_length, nt_table);
+    gssw_profile* prof = gssw_init(
+        read_num, read_length, score_matrix, 5,
+        start_full_length_bonus, end_full_length_bonus);
+
+    int32_t segLen = (read_length + 15) / 16;
+    uint32_t N = graph->num_nodes;
+
+    // Allocate per-node accumulated seeds (push-based)
+    // Each node needs segLen __m128i for H and segLen for E
+    __m128i** seed_H = (__m128i**)calloc(N, sizeof(__m128i*));
+    __m128i** seed_E = (__m128i**)calloc(N, sizeof(__m128i*));
+    for (uint32_t i = 0; i < N; i++) {
+        seed_H[i] = (__m128i*)calloc(segLen, sizeof(__m128i));
+        seed_E[i] = (__m128i*)calloc(segLen, sizeof(__m128i));
+    }
+
+    uint16_t max_score = 0;
+    gssw_align* alignment = gssw_align_create();
+
+    for (uint32_t i = 0; i < N; i++) {
+        gssw_node_desc* nd = &graph->nodes[i];
+
+        // Build input seed from accumulated H/E for this node
+        gssw_seed seed;
+        seed.pvHStore = seed_H[i];
+        seed.pvE = seed_E[i];
+
+        // Clear alignment's output seed from prior iteration
+        gssw_align_clear_matrix_and_seed(alignment);
+
+        // Run the SSE2 kernel on this node's sequence
+        const int8_t* node_seq = graph->seqs + nd->seq_off;
+        gssw_alignment_end* bests = gssw_sw_sse2_byte(
+            node_seq, 0, nd->seq_len, read_length,
+            weight_gapO, weight_gapE, prof->profile_byte, -1,
+            prof->bias, maskLen, alignment, &seed);
+
+        uint16_t score = bests[0].score;
+        if (score > max_score) max_score = score;
+        free(bests);
+
+        // Push output seed to children (element-wise SIMD max)
+        for (int16_t c = 0; c < nd->next_len; c++) {
+            int16_t child = graph->nexts[nd->next_off + c];
+            for (int32_t j = 0; j < segLen; j++) {
+                seed_H[child][j] = _mm_max_epu8(
+                    seed_H[child][j],
+                    alignment->seed.pvHStore[j]);
+                seed_E[child][j] = _mm_max_epu8(
+                    seed_E[child][j],
+                    alignment->seed.pvE[j]);
+            }
+        }
+    }
+
+    // Cleanup
+    for (uint32_t i = 0; i < N; i++) {
+        free(seed_H[i]);
+        free(seed_E[i]);
+    }
+    free(seed_H);
+    free(seed_E);
+    gssw_align_destroy(alignment);
+    free(read_num);
+    gssw_profile_destroy(prof);
+
+    return max_score;
+}
+
+void gssw_soa_graph_destroy(gssw_soa_graph* g) {
+    if (!g) return;
+    free(g->nodes);
+    free(g->nexts);
+    free(g->seqs);
+    free(g);
+}
+
 int8_t* gssw_create_score_matrix(int32_t match, int32_t mismatch) {
     // initialize scoring matrix for genome sequences
     //  A  C  G  T    N (or other ambiguous code)
