@@ -72,25 +72,9 @@ typedef struct {
 
 /*!	@typedef	structure of the alignment result
 	@field	score1	the best alignment score
-	@field	score2	sub-optimal alignment score
-	@field	ref_begin1	0-based best alignment beginning position on reference;	ref_begin1 = -1 when the best alignment beginning
-						position is not available
-	@field	ref_end1	0-based best alignment ending position on reference
-	@field	read_begin1	0-based best alignment beginning position on read; read_begin1 = -1 when the best alignment beginning
-						position is not available
-	@field	read_end1	0-based best alignment ending position on read
-	@field	read_end2	0-based sub-optimal alignment ending position on read
 */
 typedef struct {
 	uint16_t score1;
-	uint16_t score2;
-	int32_t ref_begin1;
-	int32_t ref_end1;
-	int32_t	read_begin1;
-	int32_t read_end1;
-	int32_t ref_end2;
-	// We need the seed information about H and E, which we get from the possible
-	// previous nodes.
     gssw_seed seed;
 } gssw_align;
 
@@ -113,10 +97,8 @@ struct gssw_profile{
 //typedef struct node s_node;
 typedef struct _gssw_node gssw_node;
 typedef struct _gssw_node {
-    void* data;
     uint64_t id;
-    char* seq; // sequence
-    int8_t* num; // numerical conversion of seq
+    int8_t* num; // numerical encoding of sequence
     int32_t len; // length of sequence
     gssw_node** prev;
     int32_t count_prev;
@@ -221,20 +203,10 @@ void gssw_profile_destroy(gssw_profile* prof);
 void gssw_seed_destroy(gssw_seed* seed);
 gssw_seed* gssw_create_seed_byte(int32_t readLen, gssw_node** prev, int32_t count);
 
-gssw_node* gssw_node_create(void* data,
-                            const uint64_t id,
-                            const char* seq,
-                            const int8_t* nt_table,
-                            const int8_t* score_matrix);
 void gssw_node_destroy(gssw_node* n);
 void gssw_node_add_prev(gssw_node* n, gssw_node* m);
 void gssw_node_add_next(gssw_node* n, gssw_node* m);
 void gssw_nodes_add_edge(gssw_node* n, gssw_node* m);
-void gssw_node_del_prev(gssw_node* n, gssw_node* m);
-void gssw_node_del_next(gssw_node* n, gssw_node* m);
-void gssw_nodes_del_edge(gssw_node* n, gssw_node* m);
-void gssw_node_replace_prev(gssw_node* n, gssw_node* m, gssw_node* p);
-void gssw_node_replace_next(gssw_node* n, gssw_node* m, gssw_node* p);
 
 
 gssw_node*
@@ -268,9 +240,6 @@ gssw_graph_fill_pinned (gssw_graph* graph,
                         const int32_t maskLen);
 
 gssw_graph* gssw_graph_create(uint32_t size);
-uint32_t gssw_graph_add_node(gssw_graph* graph,
-                            gssw_node* node);
-void gssw_graph_clear(gssw_graph* graph);
 void gssw_graph_destroy(gssw_graph* graph);
 
 // some utility functions
@@ -279,64 +248,6 @@ int8_t* gssw_create_nt_table(void);
 int8_t* gssw_create_num(const char* seq,
                         const int32_t len,
                         const int8_t* nt_table);
-
-
-/* Numerically computes the base of the logarithm in the log-odds interpretation of the scoring matrix */
-double gssw_recover_log_base(const int8_t* score_matrix, const double* char_freqs, uint32_t alphabet_size, double tol);
-/* Convenient wrapper for DNA matrices */
-double gssw_dna_recover_log_base(int8_t match, int8_t mismatch, double gc_content, double tol);
-
-// functions for adjusting alignments for base quality (see also gssw_qual_adj_init)
-
-/*! @function   Create a base-quality adjusted scoring matrix to use across reads
- *  @param  max_qual         highest quality score to compute adjustments for
- *  @param  gap_open         gap open penalty
- *  @param  gap_extend       gap extend penalty
- *  @param  score_matrix     match score matrix
- *                              - should be of length alphabet_size * alphabet_size
- *                              - query sequences correspond to columns
- *  @param  char_freqs       frequency of characters in the alphabet
- *                              - should be of length alphabet_size
- *                              - should sum to 1
- *  @param  alphabet_size    number of characters in alphabet
- *  @param  tol              numerical tolerance for computing base of logarithm underlying log-odds scores
- *                              - recommended, 1e-14 to 1e-12
- *  @return                  pointer to the adjusted matrix
- *  @note   matrix is indexed by (qual_score) x (ref_char) x (query_char)
- */
-int8_t* gssw_adjusted_qual_matrix(uint8_t max_qual, const int8_t* score_matrix, const double* char_freqs,
-                                  uint32_t alphabet_size, double tol);
-
-/*! @function   Create a scaled base-quality adjusted scoring matrix to use across reads (scaling improves sensitivity)
- *  @param  max_score        highest score to scale to
- *  @param  max_qual         highest quality score to compute adjustments for
- *  @param  gap_open_out     address of gap open penalty (will be modified)
- *  @param  gap_extend_out   address of gap extend penalty (will be modified)
- *  @param  score_matrix     match score matrix
- *                              - should be of length alphabet_size * alphabet_size
- *                              - query sequences correspond to columns
- *  @param  char_freqs       frequency of characters in the alphabet
- *                              - should be of length alphabet_size
- *                              - should sum to 1
- *  @param  alphabet_size    number of characters in alphabet
- *  @param  tol              numerical tolerance for computing base of logarithm underlying log-odds scores
- *                              - recommended, 1e-14 to 1e-12
- *  @return                  pointer to the adjusted matrix
- *  @note   The scores located at gap_open_out and gap_extend_out will be modified
- *  @note   matrix is indexed by (qual_score) x (ref_char) x (query_char)
- */
-int8_t* gssw_scaled_adjusted_qual_matrix(int8_t max_score, uint8_t max_qual, int8_t* gap_open_out, int8_t* gap_extend_out,
-                                         const int8_t* score_matrix, const double* char_freqs, uint32_t alphabet_size,
-                                         double tol);
-
-/* Creates a new set of matrices with 0 scores in the final row/column for ambiguous characters */
-int8_t* gssw_add_ambiguous_char_to_adjusted_matrix(int8_t* adj_mat, uint8_t max_qual, uint32_t alphabet_size);
-
-/* Wrapper for gssw_adjusted_qual_matrix using simple parameterization of char_freqs and score_matrix
-   Adds row and column of 0s for N bases automatically */
-int8_t* gssw_dna_scaled_adjusted_qual_matrix(int8_t max_score, uint8_t max_qual, int8_t* gap_open_out,
-                                             int8_t* gap_extend_out, int8_t match_score, int8_t mismatch_score,
-                                             double gc_content, double tol);
 
 
 #ifdef __cplusplus

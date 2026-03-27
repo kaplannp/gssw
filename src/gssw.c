@@ -35,7 +35,6 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <math.h>
 #include <inttypes.h>
 #include <assert.h>
 #include "gssw.h"
@@ -54,20 +53,6 @@ typedef struct {
 #define LIKELY(x) (x)
 #define UNLIKELY(x) (x)
 #endif
-
-/* Convert the coordinate in the scoring matrix into the coordinate in one line of the band. */
-#define set_u(u, w, i, j) { int x=(i)-(w); x=x>0?x:0; (u)=(j)-x+1; }
-
-/* Convert the coordinate in the direction matrix into the coordinate in one line of the band. */
-#define set_d(u, w, i, j, p) { int x=(i)-(w); x=x>0?x:0; x=(j)-x; (u)=x*3+p; }
-
-/*! @function
-  @abstract  Round an integer to the next closest power-2 integer.
-  @param  x  integer to be rounded (in place)
-  @discussion x will be modified.
- */
-#define kroundup32(x) (--(x), (x)|=(x)>>1, (x)|=(x)>>2, (x)|=(x)>>4, (x)|=(x)>>8, (x)|=(x)>>16, ++(x))
-
 
 /* Generate query profile rearrange query sequence & calculate the weight of match/mismatch. */
 __m128i* gssw_qP_byte (const int8_t* read_num,
@@ -124,133 +109,6 @@ __m128i* gssw_qP_byte (const int8_t* read_num,
     }
     return vProfile;
 }
-
-/**
- * Look up the value in a profile matrix for the given base code observed at the given read index.
- * Useful for non-swizzled access to the the swizzled profile.
- */
-uint8_t profile_get_byte(__m128i* vProfile, int32_t readLen, int32_t read_position, int32_t observed_base) {
-    // Profile is stored by observed base (most significant), then by position in the segment, then by segment in the read (lwast significant).
-
-    // How long is a segment? We have 16.
-    int32_t segLen = (readLen + 15) / 16;
-    // What segment are we in of the 16?
-    int32_t segment = read_position / segLen;
-    // And where are we in that segment?
-    int32_t pos_in_segment = read_position % segLen;
-
-    // Look at the profile as a byte array
-    uint8_t* profile_bytes = (uint8_t*) vProfile;
-
-    return profile_bytes[observed_base * (segLen * 16) + pos_in_segment * 16 + segment];
-}
-
-/**
- * Swizzle a vector of bytes into a "striped" vector, organized first by
- * position in segment and then by segment of 16. Size must be a multiple of 16.
- */
-void swizzle_byte(uint8_t* to_swizzle, int32_t size) {
-    if (size == 0) {
-        // Nothing to do!
-        return;
-    }
-
-    uint8_t* scratch = (uint8_t*) malloc(size * sizeof(uint8_t));
-    if(scratch == NULL) {
-        fprintf(stderr, "error:[gssw] Could not allocate swizzle buffer.\n");
-        exit(1);
-    }
-    // Copy the data out of the way
-    memcpy(scratch, to_swizzle, size);
-
-    // How long is a segment? We have 16.
-    int32_t segLen = (size + 15) / 16;
-
-    // We'll walk this through the destination array.
-    int32_t cursor = 0;
-
-    int32_t pos_in_segment;
-    for(pos_in_segment = 0; pos_in_segment < segLen; pos_in_segment++) {
-        // For each position in a segment
-
-        int32_t segNum;
-        for (segNum = 0; segNum < 16; segNum++) {
-            // For each segment
-
-            // Grab the byte
-            to_swizzle[cursor] = scratch[segNum * segLen + pos_in_segment];
-            // Write the next byte at the next position
-            cursor++;
-        }
-
-    }
-   free(scratch);
-}
-
-/**
- * Unswizzle a swizzled vector of bytes into a normal start-to-end vector of bytes.
- * Size must be a multiple of 16.
- */
-void unswizzle_byte(uint8_t* to_unswizzle, int32_t size) {
-    if (size == 0) {
-        // Nothing to do!
-        return;
-    }
-
-    uint8_t* scratch = (uint8_t*) malloc(size * sizeof(uint8_t));
-    if(scratch == NULL) {
-        fprintf(stderr, "error:[gssw] Could not allocate unswizzle buffer.\n");
-        exit(1);
-    }
-    // Copy the data out of the way
-    memcpy(scratch, to_unswizzle, size);
-
-    // How long is a segment? We have 16.
-    int32_t segLen = (size + 15) / 16;
-
-    int32_t i;
-    for (i = 0; i < size; i++) {
-        // Swizzled vector is arranged first by position in segment, then by segment (of 16)
-        // So go to the right position in the segment, and then to the right segment, and get the value
-        // And save it to the right place in the unswizzled vector.
-        to_unswizzle[i] = scratch[(i % segLen) * 16 + (i / segLen)];
-    }
-   free(scratch);
-}
-
-/**
- * Saturation arithmetic subtraction. (like the "subs" SSE2 intrinsics)
- * Compute a - b, returning 0 if it would be negative.
- */
-uint8_t subs_byte(uint8_t a, uint8_t b) {
-    if (b > a) {
-        return 0;
-    }
-    return a - b;
-}
-
-/**
- * Saturation arithmetic addition. (like the "addss" SSE2 intrinsics)
- * Compute a + b, returning max
- */
-uint8_t adds_byte(uint8_t a, uint8_t b) {
-    uint16_t sum = (uint16_t) a + (uint16_t) b;
-    if (sum > 255) {
-        return 255;
-    }
-    return sum;
-}
-
-/**
- * We need a max for bytes.
- */
-uint8_t max_byte(uint8_t a, uint8_t b) {
-    if (a > b) {
-        return a;
-    }
-    return b;
-}
-
 
 /* To determine the maximum values within each vector, rather than between vectors. */
 
@@ -643,15 +501,6 @@ gssw_align* gssw_fill (const gssw_profile* prof,
         fprintf(stderr, "Warning: score overflow (255) in byte mode\n");
     }
     alignment->score1 = bests[0].score;
-    alignment->ref_end1 = bests[0].ref;
-    alignment->read_end1 = bests[0].read;
-    if (maskLen >= 15) {
-        alignment->score2 = bests[1].score;
-        alignment->ref_end2 = bests[1].ref;
-    } else {
-        alignment->score2 = 0;
-        alignment->ref_end2 = -1;
-    }
     free(bests);
     return alignment;
 }
@@ -660,8 +509,6 @@ gssw_align* gssw_align_create (void) {
     gssw_align* a = (gssw_align*)calloc(1, sizeof(gssw_align));
     a->seed.pvHStore = NULL;
     a->seed.pvE = NULL;
-    a->ref_begin1 = -1;
-    a->read_begin1 = -1;
     return a;
 }
 
@@ -685,39 +532,12 @@ void gssw_seed_destroy(gssw_seed* s) {
     free(s);
 }
 
-//TODO: why is score_matrix even an argument here?
-gssw_node* gssw_node_create(void* data,
-                            const uint64_t id,
-                            const char* seq,
-                            const int8_t* nt_table,
-                            const int8_t* score_matrix) {
-    gssw_node* n = calloc(1, sizeof(gssw_node));
-    int32_t len = strlen(seq);
-    n->id = id;
-    n->len = len;
-    n->seq = (char*)malloc(len+1);
-    strncpy(n->seq, seq, len); n->seq[len] = 0;
-    n->data = data;
-    n->num = gssw_create_num(seq, len, nt_table);
-    n->count_prev = 0; // are these be set == 0 by calloc?
-    n->count_next = 0;
-    n->alignment = NULL;
-    return n;
-}
-
-// for reuse of graph through multiple alignments
-void gssw_node_clear_alignment(gssw_node* n) {
-    gssw_align_destroy(n->alignment);
-    n->alignment = NULL;
-}
-
 void gssw_profile_destroy(gssw_profile* prof) {
     free(prof->profile_byte);
     free(prof);
 }
 
 void gssw_node_destroy(gssw_node* n) {
-    free(n->seq);
     free(n->num);
     free(n->prev);
     free(n->next);
@@ -726,10 +546,6 @@ void gssw_node_destroy(gssw_node* n) {
     }
     free(n);
 }
-
-//void node_clear_alignment(node* n) {
-//    align_clear_matrix_and_seed(n->alignment);
-//}
 
 void gssw_node_add_prev(gssw_node* n, gssw_node* m) {
     ++n->count_prev;
@@ -755,59 +571,6 @@ void gssw_nodes_add_edge(gssw_node* n, gssw_node* m) {
     }
     gssw_node_add_next(n, m);
     gssw_node_add_prev(m, n);
-}
-
-void gssw_node_del_prev(gssw_node* n, gssw_node* m) {
-    gssw_node** x = (gssw_node**)malloc(n->count_prev*sizeof(gssw_node*));
-    int i = 0;
-    gssw_node** np = n->prev;
-    for ( ; i < n->count_prev; ++i, ++np) {
-        if (*np != m) {
-            x[i] = *np;
-        }
-    }
-    free(n->prev);
-    n->prev = x;
-    --n->count_prev;
-}
-
-void gssw_node_del_next(gssw_node* n, gssw_node* m) {
-    gssw_node** x = (gssw_node**)malloc(n->count_next*sizeof(gssw_node*));
-    int i = 0;
-    gssw_node** nn = n->next;
-    for ( ; i < n->count_next; ++i, ++nn) {
-        if (*nn != m) {
-            x[i] = *nn;
-        }
-    }
-    free(n->next);
-    n->next = x;
-    --n->count_next;
-}
-
-void gssw_nodes_del_edge(gssw_node* n, gssw_node* m) {
-    gssw_node_del_next(n, m);
-    gssw_node_del_prev(m, n);
-}
-
-void gssw_node_replace_prev(gssw_node* n, gssw_node* m, gssw_node* p) {
-    int i = 0;
-    gssw_node** np = n->prev;
-    for ( ; i < n->count_prev; ++i, ++np) {
-        if (*np == m) {
-            *np = p;
-        }
-    }
-}
-
-void gssw_node_replace_next(gssw_node* n, gssw_node* m, gssw_node* p) {
-    int i = 0;
-    gssw_node** nn = n->next;
-    for ( ; i < n->count_next; ++i, ++nn) {
-        if (*nn == m) {
-            *nn = p;
-        }
-    }
 }
 
 gssw_seed* gssw_create_seed_byte(int32_t readLen, gssw_node** prev, int32_t count) {
@@ -945,15 +708,6 @@ gssw_node_fill (gssw_node* node,
                                weight_gapO, weight_gapE, prof->profile_byte, -1,
                                prof->bias, maskLen, alignment, seed);
     alignment->score1 = bests[0].score;
-    alignment->ref_end1 = bests[0].ref;
-    alignment->read_end1 = bests[0].read;
-    if (maskLen >= 15) {
-        alignment->score2 = bests[1].score;
-        alignment->ref_end2 = bests[1].ref;
-    } else {
-        alignment->score2 = 0;
-        alignment->ref_end2 = -1;
-    }
     free(bests);
     return node;
 }
@@ -965,14 +719,6 @@ gssw_graph* gssw_graph_create(uint32_t size) {
     return g;
 }
 
-void gssw_graph_clear_alignment(gssw_graph* g) {
-    g->max_node = NULL;
-    uint32_t i;
-    for (i = 0; i < g->size; ++i) {
-        gssw_node_clear_alignment(g->nodes[i]);
-    }
-}
-
 void gssw_graph_destroy(gssw_graph* g) {
     uint32_t i;
     for (i = 0; i < g->size; ++i) {
@@ -982,19 +728,6 @@ void gssw_graph_destroy(gssw_graph* g) {
     free(g->nodes);
     g->nodes = NULL;
     free(g);
-}
-
-uint32_t gssw_graph_add_node(gssw_graph* graph, gssw_node* node) {
-    if (UNLIKELY(graph->size % 1024 == 0)) {
-        size_t old_size = graph->size * sizeof(void*);
-        size_t increment = 1024 * sizeof(void*);
-        if (UNLIKELY(!(graph->nodes = realloc((void*)graph->nodes, old_size + increment)))) {
-            fprintf(stderr, "error:[gssw] could not allocate memory for graph\n"); exit(1);
-        }
-    }
-    ++graph->size;
-    graph->nodes[graph->size-1] = node;
-    return graph->size;
 }
 
 int8_t* gssw_create_num(const char* seq,
@@ -1041,337 +774,3 @@ int8_t* gssw_create_nt_table(void) {
     return ret_nt_table;
 }
 
-/* Rounds a double to nearest int8_t. */
-int8_t gssw_round8_t(double x) {
-    int8_t int_x = (int8_t) x;
-    if (x >= 0.0) {
-        if (x - int_x >= 0.5) {
-            return int_x + (int8_t) 1;
-        }
-        else {
-            return int_x;
-        }
-    }
-    else {
-        if (int_x - x >= 0.5) {
-            return int_x - (int8_t) 1;
-        }
-        else {
-            return int_x;
-        }
-    }
-}
-
-/* Simple (slow) algorithm for finding greatest common factor of the scores, not performance critical. */
-int8_t gssw_score_gcf(const int8_t* score_matrix, int32_t alphabet_size) {
-    int8_t* score_matrix_copy = (int8_t*) malloc(sizeof(int8_t) * alphabet_size * alphabet_size);
-    int32_t i;
-    for (i = 0; i < alphabet_size * alphabet_size; ++i) {
-        score_matrix_copy[i] = score_matrix[i];
-    }
-    int8_t gcf = 1;
-    int8_t factor = 2;
-    int8_t min_score = 127;
-    for (i = 0; i < alphabet_size * alphabet_size; ++i) {
-        if (abs(score_matrix[i]) < min_score) {
-            min_score = (int8_t) abs(score_matrix[i]);
-        }
-    }
-    while (factor <= min_score / 2) {
-        int8_t common_factor = 1;
-        for (i = 0; i < alphabet_size * alphabet_size; ++i) {
-            if (score_matrix_copy[i] % factor != 0) {
-                common_factor = 0;
-                break;
-            }
-        }
-        if (common_factor) {
-            gcf *= factor;
-            for (i = 0; i < alphabet_size * alphabet_size; ++i) {
-                score_matrix_copy[i] /= factor;
-            }
-            min_score /= factor;
-        }
-        else {
-            factor++;
-        }
-    }
-    free(score_matrix_copy);
-    return gcf;
-}
-
-int8_t gssw_verify_valid_log_odds_score_matrix(const int8_t* score_matrix, const double* char_freqs,
-                                               uint32_t alphabet_size) {
-    int32_t i, j;
-    int8_t contains_positive_score = 0.0;
-    for (i = 0; i < alphabet_size * alphabet_size; i++) {
-        if (score_matrix[i] > 0) {
-            contains_positive_score = 1;
-            break;
-        }
-    }
-    if (!contains_positive_score) {
-        return 0;
-    }
-
-    double expected_score = 0.0;
-    for (i = 0; i < alphabet_size; i++) {
-        for (j = 0; j < alphabet_size; j++) {
-            expected_score += char_freqs[i] * char_freqs[j] * score_matrix[i * alphabet_size + j];
-        }
-    }
-    return (int8_t) (expected_score < 0.0);
-}
-
-/* Returns the total probability in the distribution of aligned characters with a given logarithm base */
-double gssw_alignment_partition_func(double lam, const int8_t* score_matrix, const double* char_freqs,
-                                     uint32_t alphabet_size) {
-    int32_t i, j;
-    double partition = 0.0;
-    for (i = 0; i < alphabet_size; i++) {
-        for (j = 0; j < alphabet_size; j++) {
-            partition += char_freqs[i] * char_freqs[j] * exp(lam * score_matrix[i * alphabet_size + j]);
-        }
-    }
-
-    if (isnan(partition)) {
-        fprintf(stderr, "error:[gssw] overflow error in log-odds base recovery subroutine.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    return partition;
-}
-
-/* Numerical routine to compute the base of the logarithm that translates alignment scores to log-odds */
-double gssw_recover_log_base(const int8_t* score_matrix, const double* char_freqs, uint32_t alphabet_size, double tol) {
-
-    if (!gssw_verify_valid_log_odds_score_matrix(score_matrix, char_freqs, alphabet_size)) {
-        fprintf(stderr, "error:[gssw] score matrix does not correspond to log-odds of any distribution, cannot adjust for base quality.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    // searching for a positive value (because it's a base of a logarithm)
-    double lower_bound;
-    double upper_bound;
-
-    // arbitrary starting point greater than zero
-    double lam = 1.0;
-    // search for a window containing lambda where total probability is 1
-    double partition = gssw_alignment_partition_func(lam, score_matrix, char_freqs, alphabet_size);
-    if (partition < 1.0) {
-        lower_bound = lam;
-        while (partition <= 1.0) {
-            lower_bound = lam;
-            lam *= 2.0;
-            partition = gssw_alignment_partition_func(lam, score_matrix, char_freqs, alphabet_size);
-        }
-        upper_bound = lam;
-    }
-    else {
-        upper_bound = lam;
-        while (partition >= 1.0) {
-            upper_bound = lam;
-            lam /= 2.0;
-            partition = gssw_alignment_partition_func(lam, score_matrix, char_freqs, alphabet_size);
-        }
-        lower_bound = lam;
-    }
-
-    // bisect to find a log base where total probability is 1
-    while (upper_bound / lower_bound - 1.0 > tol) {
-        lam = 0.5 * (lower_bound + upper_bound);
-        if (gssw_alignment_partition_func(lam, score_matrix, char_freqs, alphabet_size) < 1.0) {
-            lower_bound = lam;
-        }
-        else {
-            upper_bound = lam;
-        }
-    }
-
-    return 0.5 * (lower_bound + upper_bound);
-}
-
-double gssw_dna_recover_log_base(int8_t match, int8_t mismatch, double gc_content, double tol) {
-    double gc_freq = gc_content / 2.0;
-    double at_freq = 0.5 - gc_freq;
-    double* nt_freqs = (double*) malloc(sizeof(double) * 4);
-    nt_freqs[0] = at_freq; nt_freqs[1] = gc_freq; nt_freqs[2] = gc_freq; nt_freqs[3] = at_freq;
-    int8_t* score_matrix = (int8_t*) malloc(sizeof(int8_t) * 16);
-    int32_t i, j;
-    for (i = 0; i < 4; i++) {
-        for (j = 0; j < 4; j++) {
-            score_matrix[i * 4 + j] = (i == j) ? match : -mismatch;
-        }
-    }
-    double log_base = gssw_recover_log_base(score_matrix, nt_freqs, 4, 1e-12);
-    free(nt_freqs);
-    free(score_matrix);
-    return log_base;
-}
-
-/* Returns a 3-dimensional matrix of quality-adjusted scores indexed by (qual score) x (ref base) x (query base). */
-int8_t* gssw_adjusted_qual_matrix(uint8_t max_qual, const int8_t* score_matrix, const double* char_freqs,
-                                  uint32_t alphabet_size, double tol){
-
-    int32_t i, j, k, q;
-    // recover base of logarithm used in log odds scores
-    double lam;
-    // factoring out GCF can avoid numerical problems without affecting correctness
-    int8_t gcf = gssw_score_gcf(score_matrix, alphabet_size);
-    int8_t* score_matrix_scaled = (int8_t*) malloc(sizeof(int8_t) * alphabet_size * alphabet_size);
-    for (i = 0; i < alphabet_size * alphabet_size; i++) {
-        score_matrix_scaled[i] = score_matrix[i] / gcf;
-    }
-    lam = gssw_recover_log_base(score_matrix_scaled, char_freqs, alphabet_size, tol) / gcf;
-    free(score_matrix_scaled);
-
-    // recover the emission probabilities of the align state of the HMM
-    int32_t mat_size = alphabet_size * alphabet_size;
-    double* align_prob = (double*) malloc(sizeof(double) * mat_size);
-
-    for (i = 0; i < alphabet_size; i++) {
-        for (j = 0; j < alphabet_size; j++) {
-            align_prob[i * alphabet_size + j] = exp(lam * score_matrix[i * alphabet_size + j])
-                                                      * char_freqs[i] * char_freqs[j];
-        }
-    }
-
-    // compute the sum of the emission probabilities under a base error
-    double* align_complement_prob = (double*) malloc(sizeof(double) * mat_size);
-    for (i = 0; i < alphabet_size; i++) {
-        for (j = 0; j < alphabet_size; j++) {
-            align_complement_prob[i * alphabet_size + j] = 0.0;
-            for (k = 0; k < alphabet_size; k++) {
-                if (k != j) {
-                    align_complement_prob[i * alphabet_size + j] += align_prob[i * alphabet_size + k];
-                }
-            }
-        }
-    }
-
-    // quality score of random guessing
-    int8_t lowest_meaningful_qual = gssw_round8_t(-10.0 * log10(1.0 - 1.0 / alphabet_size));
-
-    // compute the adjusted alignment scores for each quality level
-    int8_t* adj_qual_mat = (int8_t*) calloc(mat_size * (max_qual + (int8_t) 1), sizeof(int8_t));
-    double score, err;
-    for (q = lowest_meaningful_qual; q <= max_qual; q++) {
-        err = pow(10.0, -q / 10.0);
-        for (i = 0; i < alphabet_size; i++) {
-            for (j = 0; j < alphabet_size; j++) {
-                score = log(((1.0 - err) * align_prob[i * alphabet_size + j] + (err / (alphabet_size - 1.0)) * align_complement_prob[i * alphabet_size + j])
-                            / (char_freqs[i] * ((1.0 - err) * char_freqs[j] + (err / (alphabet_size - 1.0)) * (1.0 - char_freqs[j]))));
-                score /= lam;
-                adj_qual_mat[q * mat_size + i * alphabet_size + j] = gssw_round8_t(score);
-            }
-        }
-    }
-
-    free(align_complement_prob);
-    free(align_prob);
-
-    return adj_qual_mat;
-}
-
-/* Returns a 3-dimensional matrix of quality-adjusted scores indexed by (qual score) x (ref base) x (query base)
- * that have been scaled up to (at most) a max score to accentuate differences, also adjusts value of gap penalties. */
-int8_t* gssw_scaled_adjusted_qual_matrix(int8_t max_score, uint8_t max_qual, int8_t* gap_open_out, int8_t* gap_extend_out,
-                                         const int8_t* score_matrix, const double* char_freqs, uint32_t alphabet_size,
-                                         double tol) {
-
-    int8_t gap_extend = *gap_extend_out;
-    int8_t gap_open = *gap_open_out;
-
-    // find largest integer multiplier that keeps all scores under maximum
-    uint8_t multiplier = (uint8_t) abs(max_score);
-    if (abs(max_score / gap_open) < multiplier) {
-        multiplier = (uint8_t) max_score / gap_open;
-    }
-    if (abs(max_score / gap_extend) < multiplier) {
-        multiplier = (uint8_t) max_score / gap_extend;
-    }
-    int32_t i;
-    for (i = 0; i < alphabet_size * alphabet_size; i++) {
-        if (abs(max_score / score_matrix[i]) < multiplier) {
-            multiplier = (uint8_t) abs(max_score / score_matrix[i]);
-        }
-    }
-
-    if (multiplier == 0) {
-        fprintf(stderr, "error:[gssw] max scaled score is smaller than baseline score.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    // scale scores by multiplier
-    int8_t* scaled_score_mat = (int8_t*) malloc(sizeof(int8_t) * alphabet_size * alphabet_size);
-
-    for (i = 0; i < alphabet_size * alphabet_size; i++) {
-        scaled_score_mat[i] = multiplier * score_matrix[i];
-    }
-
-    // compute adjusted score matrices
-    int8_t* scaled_adj_qual_mat = gssw_adjusted_qual_matrix(max_qual, scaled_score_mat, char_freqs, alphabet_size, tol);
-
-    free(scaled_score_mat);
-
-    *gap_open_out = multiplier * gap_open;
-    *gap_extend_out = multiplier * gap_extend;
-
-    return scaled_adj_qual_mat;
-}
-
-int8_t* gssw_add_ambiguous_char_to_adjusted_matrix(int8_t* adj_mat, uint8_t max_qual, uint32_t alphabet_size) {
-    int32_t mat_size = alphabet_size * alphabet_size;
-    int32_t aug_alph_size = alphabet_size + 1;
-    int32_t aug_mat_size = aug_alph_size * aug_alph_size;
-
-    int8_t* aug_adj_mat = (int8_t*) malloc(sizeof(int8_t) * aug_mat_size * (max_qual + 1));
-
-    int32_t q, i, j;
-    for (q = 0; q <= max_qual; q++) {
-        for (i = 0; i < aug_alph_size; i++) {
-            for (j = 0; j < aug_alph_size; j++) {
-                if (i == alphabet_size || j == alphabet_size) {
-                    aug_adj_mat[q * aug_mat_size + i * aug_alph_size + j] = 0;
-                }
-                else {
-                    aug_adj_mat[q * aug_mat_size + i * aug_alph_size + j] = adj_mat[q * mat_size + i * alphabet_size + j];
-                }
-            }
-        }
-    }
-
-    return aug_adj_mat;
-}
-
-// automatically adds 0-scoring N to the final row and column
-int8_t* gssw_dna_scaled_adjusted_qual_matrix(int8_t max_score, uint8_t max_qual, int8_t* gap_open_out,
-                                             int8_t* gap_extend_out, int8_t match_score, int8_t mismatch_score,
-                                             double gc_content, double tol) {
-
-    double gc_freq = gc_content / 2.0;
-    double at_freq = 0.5 - gc_freq;
-    double* nt_freqs = (double*) malloc(sizeof(double) * 4);
-    nt_freqs[0] = at_freq; nt_freqs[1] = gc_freq; nt_freqs[2] = gc_freq; nt_freqs[3] = at_freq;
-
-    int32_t i, j;
-    int8_t* score_matrix = (int8_t*) malloc(sizeof(int8_t) * 16);
-    for (i = 0; i < 4; ++i) {
-        for (j = 0; j < 4; ++j) {
-            score_matrix[i * 4 + j] = (i == j) ? match_score : -mismatch_score;
-        }
-    }
-
-
-    int8_t* adj_mat_init = gssw_scaled_adjusted_qual_matrix(max_score, max_qual, gap_open_out,
-                                                            gap_extend_out, score_matrix,
-                                                            nt_freqs, 4, tol);
-
-    int8_t* adj_mat = gssw_add_ambiguous_char_to_adjusted_matrix(adj_mat_init, max_qual, 4);
-
-    free(nt_freqs);
-    free(score_matrix);
-    free(adj_mat_init);
-
-    return adj_mat;
-}
