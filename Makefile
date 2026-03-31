@@ -12,20 +12,7 @@ EXETEST=gssw_test
 
 .PHONY:all clean cleanlocal test
 
-all:$(BIN_DIR)/$(EXE) $(BIN_DIR)/$(EXEADJ) $(BIN_DIR)/$(EXETEST) $(LIB_DIR)/libgssw.a
-
-$(BIN_DIR)/$(EXE):$(OBJ_DIR)/$(OBJ) $(SRC_DIR)/example.c
-	# Make dest directory
-	@mkdir -p $(@D)
-	$(CC) $(LDFLAGS) $(CPPFLAGS) $(CFLAGS) $(SRC_DIR)/example.c -o $@ $< -lm -lz
-
-$(BIN_DIR)/$(EXEADJ):$(OBJ_DIR)/$(OBJ) $(SRC_DIR)/example_adj.c
-	@mkdir -p $(@D)
-	$(CC) $(LDFLAGS) $(CPPFLAGS) $(CFLAGS) $(SRC_DIR)/example_adj.c -o $@ $< -lm -lz
-
-$(BIN_DIR)/$(EXETEST):$(OBJ_DIR)/$(OBJ) $(SRC_DIR)/gssw_test.c
-	@mkdir -p $(@D)
-	$(CC) $(LDFLAGS) $(CPPFLAGS) $(CFLAGS) $(SRC_DIR)/gssw_test.c -o $@ $< -lm -lz
+all:$(LIB_DIR)/libgssw.a
 
 $(OBJ_DIR)/$(OBJ):$(SRC_DIR)/gssw.h $(SRC_DIR)/gssw.c
 	@mkdir -p $(@D)
