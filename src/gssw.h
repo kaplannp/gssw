@@ -162,11 +162,14 @@ void gssw_graph_destroy(gssw_graph* graph);
 
 // SoA graph alignment (push-based seed propagation, returns best score)
 // All scoring params hardcoded: gapO=6, gapE=1, maskLen=15
+// Profile must be pre-built via gssw_init()
 uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
-                              const int8_t* read_num,
-                              int32_t read_length);
+                              gssw_profile* prof);
 
 void gssw_soa_graph_destroy(gssw_soa_graph* g);
+
+// Print cumulative timing breakdown (profile, kernel, overhead)
+void gssw_print_timers(void);
 
 
 #ifdef __cplusplus

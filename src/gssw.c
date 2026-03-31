@@ -37,6 +37,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <assert.h>
+#include <time.h>
 #include "gssw.h"
 
 /* Internal-only struct for returning alignment end positions */
@@ -572,22 +573,47 @@ void gssw_graph_destroy(gssw_graph* g) {
     free(g);
 }
 
+// Cumulative timing accumulators (in nanoseconds)
+static uint64_t total_fill_ns = 0;
+static uint64_t total_profile_ns = 0;
+static uint64_t total_kernel_ns = 0;
+
+static uint64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
+}
+
+void gssw_print_timers(void) {
+    double fill_ms = total_fill_ns / 1e6;
+    double prof_ms = total_profile_ns / 1e6;
+    double kern_ms = total_kernel_ns / 1e6;
+    double other_ms = fill_ms - prof_ms - kern_ms;
+    fprintf(stderr,
+        "gssw timers (cumulative over all queries):\n"
+        "  qP_byte (profile): %10.3f ms\n"
+        "  sw_sse2_byte:      %10.3f ms\n"
+        "  other (overhead):  %10.3f ms\n"
+        "  total fill:        %10.3f ms\n",
+        prof_ms, kern_ms, other_ms, fill_ms);
+}
+
 // SoA graph fill: push-based seed propagation, returns best score
 // Hardcoded: gapO=6, gapE=1, maskLen=15
+// Profile must be pre-built via gssw_init()
 uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
-                              const int8_t* read_num,
-                              int32_t read_length) {
+                              gssw_profile* prof) {
     const uint8_t weight_gapO = 6;
     const uint8_t weight_gapE = 1;
     const int32_t maskLen = 15;
 
-    gssw_profile* prof = gssw_init(read_num, read_length);
+    uint64_t t_fill_start = now_ns();
 
+    int32_t read_length = prof->readLen;
     int32_t segLen = (read_length + 15) / 16;
     uint32_t N = graph->num_nodes;
 
     // Allocate per-node accumulated seeds (push-based)
-    // Each node needs segLen __m128i for H and segLen for E
     __m128i** seed_H = (__m128i**)calloc(N, sizeof(__m128i*));
     __m128i** seed_E = (__m128i**)calloc(N, sizeof(__m128i*));
     for (uint32_t i = 0; i < N; i++) {
@@ -611,10 +637,13 @@ uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
 
         // Run the SSE2 kernel on this node's sequence
         const int8_t* node_seq = graph->seqs + nd->seq_off;
+        uint64_t tk0 = now_ns();
         gssw_alignment_end* bests = gssw_sw_sse2_byte(
             node_seq, 0, nd->seq_len, read_length,
             weight_gapO, weight_gapE, prof->profile_byte, -1,
             prof->bias, maskLen, alignment, &seed);
+        uint64_t tk1 = now_ns();
+        total_kernel_ns += (tk1 - tk0);
 
         uint16_t score = bests[0].score;
         if (score > max_score) max_score = score;
@@ -642,7 +671,9 @@ uint16_t gssw_soa_graph_fill(gssw_soa_graph* graph,
     free(seed_H);
     free(seed_E);
     gssw_align_destroy(alignment);
-    gssw_profile_destroy(prof);
+
+    uint64_t t_fill_end = now_ns();
+    total_fill_ns += (t_fill_end - t_fill_start);
 
     return max_score;
 }
